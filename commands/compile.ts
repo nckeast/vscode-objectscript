@@ -72,7 +72,6 @@ async function compile(docs: CurrentFile[], flags?: string): Promise<any> {
     .then(loadChanges)
     .catch((error: Error) => {
       outputChannel.appendLine(error.message);
-      outputChannel.show(true);
       vscode.window.showErrorMessage(error.message, "Show details")
         .then((data) => {
           outputChannel.show(true);
@@ -91,9 +90,16 @@ export async function importAndCompile(askFLags = false): Promise<any> {
 
   const defaultFlags = config().compileFlags;
   const flags = askFLags ? await compileFlags() : defaultFlags;
-  return importFile(file).catch((error) => {
-    // console.error(error);
-  }).then(() => compile([file], flags));
+  return importFile(file).then(
+    () => compile([file], flags),
+    (error: Error) => {
+      outputChannel.appendLine(error.message);
+      vscode.window.showErrorMessage(error.message, "Show details")
+        .then(() => {
+          outputChannel.show(true);
+        });
+    }
+  );
 }
 
 // Compiles all files types in the namespace
