@@ -301,22 +301,22 @@
       {
         "command": "vscode-objectscript.explorer.export",
         "title": "Export",
-        "category": "ObjecScript"
+        "category": "ObjectScript"
       },
       {
         "command": "vscode-objectscript.explorer.otherNamespace",
         "title": "View another namespace",
-        "category": "ObjecScript"
+        "category": "ObjectScript"
       },
       {
         "command": "vscode-objectscript.explorer.otherNamespaceClose",
         "title": "Close namespace",
-        "category": "ObjecScript"
+        "category": "ObjectScript"
       },
       {
         "command": "vscode-objectscript.explorer.delete",
         "title": "Delete",
-        "category": "ObjecScript"
+        "category": "ObjectScript"
       },
       {
         "command": "vscode-objectscript.explorer.refresh",
@@ -356,7 +356,7 @@
         "title": "Show server actions"
       },
       {
-        "category": "ObjectScsript",
+        "category": "ObjectScript",
         "command": "vscode-objectscript.compileFolder",
         "title": "Import and compile"
       }
