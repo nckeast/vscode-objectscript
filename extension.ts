@@ -154,11 +154,11 @@ export async function activate(
     vscode.commands.executeCommand("vscode-objectscript.compile");
   });
 
-  vscode.window.onDidChangeActiveTextEditor((textEditor: vscode.TextEditor) => {
+	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument((textDocument: vscode.TextDocument) => {
     if (config("autoPreviewXML")) {
-      xml2doc(context, textEditor);
+      xml2doc(context, textDocument);
     }
-  });
+	}));
 
   const wordPattern =
     /(\"(?:[^\"]|\"\")*\")|((\${1,3}|[irm]?%|\^|#)?[^`~!\@@#\%\^\&*()-\=+[{\]\}\|\;\:\'\"\,.\<>\/\?_\s]+)/;
@@ -251,7 +251,9 @@ export async function activate(
     vscode.commands.registerCommand(
       "vscode-objectscript.previewXml",
       (...args) => {
-        xml2doc(context, window.activeTextEditor);
+        if (window.activeTextEditor && window.activeTextEditor.document) {
+          xml2doc(context, window.activeTextEditor.document);
+        }
       },
     ),
 
