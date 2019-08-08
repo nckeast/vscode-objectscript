@@ -3,8 +3,9 @@ trigger:
     include:
       - master
   tags:
-    include: ['*']
-
+    include: 
+      - v*
+    
 jobs:
   - job: Windows
     pool:
@@ -93,3 +94,13 @@ jobs:
         inputs:
           pathToPublish: $(Build.ArtifactStagingDirectory)
           artifactName: azure-pipelines-vscode
+      - task: GitHubRelease@0
+        inputs:
+          gitHubConnection: 'github'
+          repositoryName: '$(Build.Repository.Name)'
+          action: 'create'
+          target: '$(Build.SourceVersion)'
+          tagSource: 'manual'
+          tag: '$(Build.BuildNumber)'
+          releaseNotesSource: 'input'
+          isPreRelease: true
