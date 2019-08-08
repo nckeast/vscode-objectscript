@@ -190,7 +190,8 @@
         ],
         "extensions": [
           ".mac",
-          ".int"
+          ".int",
+          ".rtn"
         ],
         "configuration": "./language-configuration.json"
       },
