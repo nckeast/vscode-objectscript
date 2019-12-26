@@ -1,12 +1,20 @@
+const extensionId = "daimor.vscode-objectscript";
+
 import vscode = require("vscode");
+
+import { AtelierJob } from "./atelier";
 const { workspace, window } = vscode;
 export const OBJECTSCRIPT_FILE_SCHEMA = "objectscript";
 export const OBJECTSCRIPTXML_FILE_SCHEMA = "objectscriptxml";
 export const FILESYSTEM_SCHEMA = "isfs";
 export const schemas = [OBJECTSCRIPT_FILE_SCHEMA, OBJECTSCRIPTXML_FILE_SCHEMA, FILESYSTEM_SCHEMA];
-import { AtelierJob } from "./models";
 
-import { importAndCompile, importFolder as importFileOrFolder, namespaceCompile } from "./commands/compile";
+import {
+  importAndCompile,
+  importFolder as importFileOrFolder,
+  namespaceCompile,
+  compileExplorerItem,
+} from "./commands/compile";
 import { deleteItem } from "./commands/delete";
 import { exportAll, exportExplorerItem } from "./commands/export";
 import { serverActions } from "./commands/serverActions";
@@ -14,6 +22,9 @@ import { subclass } from "./commands/subclass";
 import { superclass } from "./commands/superclass";
 import { viewOthers } from "./commands/viewOthers";
 import { xml2doc } from "./commands/xml2doc";
+import { mainMenu } from "./commands/studio";
+
+import { getLanguageConfiguration } from "./languageConfiguration";
 
 import { DocumentContentProvider } from "./providers/DocumentContentProvider";
 import { DocumentFormattingEditProvider } from "./providers/DocumentFormattingEditProvider";
@@ -24,6 +35,7 @@ import { ObjectScriptDefinitionProvider } from "./providers/ObjectScriptDefiniti
 import { ObjectScriptFoldingRangeProvider } from "./providers/ObjectScriptFoldingRangeProvider";
 import { ObjectScriptHoverProvider } from "./providers/ObjectScriptHoverProvider";
 import { ObjectScriptRoutineSymbolProvider } from "./providers/ObjectScriptRoutineSymbolProvider";
+import { ObjectScriptClassCodeLensProvider } from "./providers/ObjectScriptClassCodeLensProvider";
 import { XmlContentProvider } from "./providers/XmlContentProvider";
 
 import { StatusCodeError } from "request-promise/errors";
@@ -34,12 +46,27 @@ import { ObjectScriptExplorerProvider } from "./explorer/explorer";
 import { WorkspaceNode } from "./explorer/models/workspaceNode";
 import { FileSystemProvider } from "./providers/FileSystemPovider/FileSystemProvider";
 import { WorkspaceSymbolProvider } from "./providers/WorkspaceSymbolProvider";
-import { currentWorkspaceFolder, outputChannel } from "./utils";
+import { currentWorkspaceFolder, outputChannel, portFromDockerCompose, terminalWithDocker } from "./utils";
+import { ObjectScriptDiagnosticProvider } from "./providers/ObjectScriptDiagnosticProvider";
+import { DocumentRangeFormattingEditProvider } from "./providers/DocumentRangeFormattingEditProvider";
+
+/* proposed */
+import { FileSearchProvider } from "./providers/FileSystemPovider/FileSearchProvider";
+import { TextSearchProvider } from "./providers/FileSystemPovider/TextSearchProvider";
+
 export let fileSystemProvider: FileSystemProvider;
 export let explorerProvider: ObjectScriptExplorerProvider;
 export let documentContentProvider: DocumentContentProvider;
 export let workspaceState: vscode.Memento;
 export let extensionContext: vscode.ExtensionContext;
+export let panel: vscode.StatusBarItem;
+export let terminal: vscode.Terminal;
+
+import TelemetryReporter from "vscode-extension-telemetry";
+
+const packageJson = vscode.extensions.getExtension(extensionId).packageJSON;
+const extensionVersion = packageJson.version;
+const aiKey = packageJson.aiKey;
 
 export const config = (setting?: string, workspaceFolderName?: string): any => {
   workspaceFolderName = workspaceFolderName || currentWorkspaceFolder();
@@ -69,9 +96,61 @@ export function getXmlUri(uri: vscode.Uri): vscode.Uri {
     scheme: OBJECTSCRIPTXML_FILE_SCHEMA,
   });
 }
+let reporter;
+
+export const checkConnection = (clearCookies = false): void => {
+  const conn = config("conn");
+  const connInfo = `${conn.host}:${conn.port}[${conn.ns}]`;
+  panel.text = connInfo;
+  panel.tooltip = "";
+  vscode.commands.executeCommand("setContext", "vscode-objectscript.connectActive", conn.active);
+  if (!conn.active) {
+    panel.text = `${connInfo} - Disabled`;
+    return;
+  }
+  workspaceState.update(currentWorkspaceFolder() + ":port", undefined);
+  const { port: dockerPort, docker: withDocker } = portFromDockerCompose(config("conn.docker-compose"), conn.port);
+  workspaceState.update(currentWorkspaceFolder() + ":docker", withDocker);
+  if (withDocker) {
+    terminalWithDocker();
+    if (dockerPort !== conn.port) {
+      workspaceState.update(currentWorkspaceFolder() + ":port", dockerPort);
+    }
+  }
+
+  const api = new AtelierAPI(currentWorkspaceFolder());
+  if (clearCookies) {
+    api.clearCookies();
+  }
+  api
+    .serverInfo()
+    .then(async info => {
+      // panel.text = `${connInfo} - Connected`;
+    })
+    .catch(error => {
+      let message = error.message;
+      if (error instanceof StatusCodeError && error.statusCode === 401) {
+        message = "Not Authorized";
+        outputChannel.appendLine(
+          `Authorization error: please check your username/password in the settings,
+          and if you have sufficient privileges on the server.`
+        );
+      } else {
+        outputChannel.appendLine("Error: " + message);
+        outputChannel.appendLine("Please check your network settings in the settings.");
+      }
+      panel.text = `${connInfo} - ERROR`;
+      panel.tooltip = message;
+    })
+    .finally(() => {
+      explorerProvider.refresh();
+    });
+};
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const languages = require(context.asAbsolutePath("./package.json")).contributes.languages.map(lang => lang.id);
+  reporter = new TelemetryReporter(extensionId, extensionVersion, aiKey);
+
+  const languages = packageJson.contributes.languages.map(lang => lang.id);
   workspaceState = context.workspaceState;
   extensionContext = context;
   workspaceState.update("workspaceFolder", "");
@@ -84,50 +163,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   vscode.window.registerTreeDataProvider("ObjectScriptExplorer", explorerProvider);
 
-  const panel = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+  panel = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
 
   const debugAdapterFactory = new ObjectScriptDebugAdapterDescriptorFactory();
 
   panel.command = "vscode-objectscript.serverActions";
   panel.show();
-  const checkConnection = () => {
-    const conn = config("conn");
-    const connInfo = `${conn.host}:${conn.port}[${conn.ns}]`;
-    panel.text = connInfo;
-    panel.tooltip = "";
-    vscode.commands.executeCommand("setContext", "vscode-objectscript.connectActive", conn.active);
-    if (!conn.active) {
-      panel.text = `${connInfo} - Disabled`;
-      return;
-    }
-    const api = new AtelierAPI(currentWorkspaceFolder());
-    api
-      .serverInfo()
-      .then(async info => {
-        panel.text = `${connInfo} - Connected`;
-      })
-      .catch(error => {
-        let message = error.message;
-        if (error instanceof StatusCodeError && error.statusCode === 401) {
-          message = "Not Authorized";
-          outputChannel.appendLine(
-            `Authorization error: please check your username/password in the settings,
-            and if you have sufficient privileges on the server.`
-          );
-        } else {
-          outputChannel.appendLine("Error: " + message);
-          outputChannel.appendLine("Please check your network settings in the settings.");
-        }
-        panel.text = `${connInfo} - ERROR`;
-        panel.tooltip = message;
-      })
-      .finally(() => {
-        explorerProvider.refresh();
-      });
-  };
+
   checkConnection();
-  vscode.workspace.onDidChangeConfiguration(() => {
-    checkConnection();
+  vscode.workspace.onDidChangeConfiguration(({ affectsConfiguration }) => {
+    if (affectsConfiguration("objectscript.conn")) {
+      checkConnection(true);
+    }
   });
 
   workspace.onDidSaveTextDocument(file => {
@@ -143,13 +190,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 	}));
 
-  const wordPattern = /("(?:[^"]|"")*")|((\${1,3}|[irm]?%|\^|#)?[^`~!@@#%^&*()-=+[{\]}|;:'",.<>/?_\s]+)/;
-
   const documentSelector = (...list) =>
     ["file", ...schemas].reduce((acc, scheme) => acc.concat(list.map(language => ({ scheme, language }))), []);
 
+  const diagnosticProvider = new ObjectScriptDiagnosticProvider();
+  if (vscode.window.activeTextEditor) {
+    diagnosticProvider.updateDiagnostics(vscode.window.activeTextEditor.document);
+  }
+
   context.subscriptions.push(
-    window.onDidChangeActiveTextEditor(e => {
+    reporter,
+    workspace.onDidChangeTextDocument(event => {
+      diagnosticProvider.updateDiagnostics(event.document);
+    }),
+    window.onDidChangeActiveTextEditor(editor => {
+      if (editor) {
+        diagnosticProvider.updateDiagnostics(editor.document);
+      }
       if (workspace.workspaceFolders && workspace.workspaceFolders.length > 1) {
         const workspaceFolder = currentWorkspaceFolder();
         if (workspaceFolder && workspaceFolder !== workspaceState.get<string>("workspaceFolder")) {
@@ -169,6 +226,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("vscode-objectscript.compileAllWithFlags", () => namespaceCompile(true)),
     vscode.commands.registerCommand("vscode-objectscript.compileFolder", importFileOrFolder),
     vscode.commands.registerCommand("vscode-objectscript.export", exportAll),
+    vscode.commands.registerCommand("vscode-objectscript.debug", (program: string, askArgs: boolean) => {
+      const startDebugging = args => {
+        const programWithArgs = program + `(${args})`;
+        vscode.debug.startDebugging(undefined, {
+          type: "objectscript",
+          request: "launch",
+          name: `Debug ${program}`,
+          program: programWithArgs,
+        });
+      };
+      if (!askArgs) {
+        startDebugging("");
+        return;
+      }
+      return vscode.window
+        .showInputBox({
+          placeHolder: "Please enter comma delimited arguments list",
+        })
+        .then(args => {
+          startDebugging(args);
+        });
+    }),
     vscode.commands.registerCommand("vscode-objectscript.pickProcess", async config => {
       const system = config.system;
       const api = new AtelierAPI();
@@ -195,6 +274,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
     }),
     vscode.commands.registerCommand("vscode-objectscript.viewOthers", viewOthers),
+    vscode.commands.registerCommand("vscode-objectscript.studio.actions", mainMenu),
     vscode.commands.registerCommand("vscode-objectscript.subclass", subclass),
     vscode.commands.registerCommand("vscode-objectscript.superclass", superclass),
     vscode.commands.registerCommand("vscode-objectscript.serverActions", serverActions),
@@ -204,6 +284,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("vscode-objectscript.explorer.openRoutine", vscode.window.showTextDocument),
     vscode.commands.registerCommand("vscode-objectscript.explorer.export", exportExplorerItem),
     vscode.commands.registerCommand("vscode-objectscript.explorer.delete", deleteItem),
+    vscode.commands.registerCommand("vscode-objectscript.explorer.compile", compileExplorerItem),
+    vscode.commands.registerCommand("vscode-objectscript.explorer.showGenerated", (workspaceNode: WorkspaceNode) => {
+      workspaceState.update(`ExplorerGenerated:${workspaceNode.uniqueId}`, true);
+      return explorerProvider.refresh();
+    }),
+    vscode.commands.registerCommand("vscode-objectscript.explorer.hideGenerated", (workspaceNode: WorkspaceNode) => {
+      workspaceState.update(`ExplorerGenerated:${workspaceNode.uniqueId}`, false);
+      return explorerProvider.refresh();
+    }),
     vscode.commands.registerCommand("vscode-objectscript.explorer.otherNamespace", (workspaceNode: WorkspaceNode) => {
       return explorerProvider.selectNamespace(workspaceNode.label);
     }),
@@ -222,15 +311,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(OBJECTSCRIPT_FILE_SCHEMA, documentContentProvider),
     vscode.workspace.registerTextDocumentContentProvider(OBJECTSCRIPTXML_FILE_SCHEMA, xmlContentProvider),
     vscode.workspace.registerFileSystemProvider(FILESYSTEM_SCHEMA, fileSystemProvider, { isCaseSensitive: true }),
-    vscode.languages.setLanguageConfiguration("objectscript-class", {
-      wordPattern,
-    }),
-    vscode.languages.setLanguageConfiguration("objectscript", {
-      wordPattern,
-    }),
-    vscode.languages.setLanguageConfiguration("objectscript-macros", {
-      wordPattern,
-    }),
+    vscode.languages.setLanguageConfiguration("objectscript-class", getLanguageConfiguration("class")),
+    vscode.languages.setLanguageConfiguration("objectscript", getLanguageConfiguration("routine")),
+    vscode.languages.setLanguageConfiguration("objectscript-macros", getLanguageConfiguration("routine")),
     vscode.languages.registerDocumentSymbolProvider(
       documentSelector("objectscript-class"),
       new ObjectScriptClassSymbolProvider()
@@ -267,9 +350,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       documentSelector("objectscript-class", "objectscript", "objectscript-macros"),
       new DocumentFormattingEditProvider()
     ),
+    vscode.languages.registerDocumentRangeFormattingEditProvider(
+      documentSelector("objectscript-class", "objectscript", "objectscript-macros"),
+      new DocumentRangeFormattingEditProvider()
+    ),
     vscode.languages.registerWorkspaceSymbolProvider(new WorkspaceSymbolProvider()),
     vscode.debug.registerDebugConfigurationProvider("objectscript", new ObjectScriptConfigurationProvider()),
     vscode.debug.registerDebugAdapterDescriptorFactory("objectscript", debugAdapterFactory),
-    debugAdapterFactory
+    debugAdapterFactory,
+    vscode.languages.registerCodeLensProvider(
+      documentSelector("objectscript-class"),
+      new ObjectScriptClassCodeLensProvider()
+    ),
+
+    /* from proposed api */
+    vscode.workspace.registerFileSearchProvider(FILESYSTEM_SCHEMA, new FileSearchProvider()),
+    vscode.workspace.registerTextSearchProvider(FILESYSTEM_SCHEMA, new TextSearchProvider())
   );
+  reporter.sendTelemetryEvent("extensionActivated");
+}
+
+export function deactivate() {
+  // This will ensure all pending events get flushed
+  reporter.dispose();
 }

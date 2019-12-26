@@ -1,7 +1,8 @@
 import fs = require("fs");
 import path = require("path");
+import { execSync } from "child_process";
 import * as vscode from "vscode";
-import { schemas, workspaceState } from "../extension";
+import { config, schemas, workspaceState } from "../extension";
 
 export const outputChannel = vscode.window.createOutputChannel("ObjectScript");
 
@@ -32,8 +33,18 @@ export function currentFile(document?: vscode.TextDocument): CurrentFile {
   let ext = "";
   if (fileExt === "cls") {
     const match = content.match(/^Class (%?\w+(?:\.\w+)+)/im);
-    name = match[1];
-    ext = "cls";
+    if (match) {
+      name = match[1];
+      ext = "cls";
+    }
+  } else if (fileExt === "csp") {
+    name =
+      config().conn.label.toLowerCase() +
+      fileName
+        .split(config().conn.label.toLowerCase())[1]
+        .replace(/\\/g, "/")
+        .replace(".csp", "");
+    ext = "csp";
   } else {
     const match = content.match(/^ROUTINE ([^\s]+)(?:\s+\[.*Type=([a-z]{3,}))?/i);
     name = match[1];
@@ -75,10 +86,11 @@ export async function mkdirSyncRecursive(dirpath: string): Promise<string> {
   });
 }
 
-export function currentWorkspaceFolder(): string {
+export function currentWorkspaceFolder(document?: vscode.TextDocument): string {
   let workspaceFolder;
-  if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document) {
-    const uri = vscode.window.activeTextEditor.document.uri;
+  document = document ? document : vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+  if (document) {
+    const uri = document.uri;
     if (uri.scheme === "file") {
       if (vscode.workspace.getWorkspaceFolder(uri)) {
         workspaceFolder = vscode.workspace.getWorkspaceFolder(uri).name;
@@ -109,4 +121,54 @@ export function onlyUnique(value: any, index: number, self: any): boolean {
 
 export function notNull(el: any): boolean {
   return el !== null;
+}
+
+export function portFromDockerCompose(options, defaultPort: number): { port: number; docker: boolean } {
+  const result = { port: defaultPort, docker: false };
+  if (!options) {
+    return result;
+  }
+  const { file = "docker-compose.yml", service, internalPort = 52773 } = options;
+  if (!internalPort || !file || !service || service === "") {
+    return result;
+  }
+  const cwd = workspaceFolderUri().fsPath;
+  const cmd = `docker-compose -f ${file} port --protocol=tcp ${service} ${internalPort}`;
+  try {
+    const serviceLine = execSync(cmd, {
+      cwd,
+    })
+      .toString()
+      .replace("/r", "")
+      .split("/n")
+      .pop();
+    const servicePortMatch = serviceLine.match(new RegExp(`:(\\d+)`));
+    if (servicePortMatch) {
+      const [, newPort] = servicePortMatch;
+      return { port: parseInt(newPort, 10), docker: true };
+    }
+  } catch (e) {
+    console.log(e);
+    // nope
+  }
+  return result;
+}
+
+export function terminalWithDocker() {
+  const { ns } = config("conn");
+  const { service } = config("conn.docker-compose");
+
+  const terminalName = `ObjectScript:${service}`;
+  let terminal = vscode.window.terminals.find(el => el.name === terminalName);
+  if (!terminal) {
+    terminal = vscode.window.createTerminal(terminalName, "docker-compose", [
+      "exec",
+      service,
+      "/bin/bash",
+      "-c",
+      `command -v ccontrol >/dev/null 2>&1 && ccontrol session $ISC_PACKAGE_INSTANCENAME -U ${ns} || iris session $ISC_PACKAGE_INSTANCENAME -U ${ns}`,
+    ]);
+  }
+  terminal.show();
+  return terminal;
 }

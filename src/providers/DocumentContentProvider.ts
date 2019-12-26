@@ -19,29 +19,40 @@ export class DocumentContentProvider implements vscode.TextDocumentContentProvid
     const root = [workspaceFolderUri(workspaceFolder).fsPath, folder].join(path.sep);
     const fileName = getFileName(root, name, atelier, addCategory);
     if (fs.existsSync(fileName)) {
-      return fileName;
+      return fs.realpathSync.native(fileName);
     }
   }
 
-  public static getUri(name: string, workspaceFolder?: string, namespace?: string, vfs = true): vscode.Uri {
-    workspaceFolder = workspaceFolder && workspaceFolder !== "" ? workspaceFolder : currentWorkspaceFolder();
-    const found = this.getAsFile(name, workspaceFolder);
-    if (found) {
-      return vscode.Uri.file(found);
+  public static getUri(name: string, workspaceFolder?: string, namespace?: string, vfs?: boolean): vscode.Uri {
+    if (vfs === undefined) {
+      vfs = config("serverSideEditing");
     }
-    const fileName = name
-      .split(".")
-      .slice(0, -1)
-      .join("/");
-    const fileExt = name.split(".").pop();
-    name = fileName + "." + fileExt;
-    let uri = vscode.Uri.file(name).with({
-      scheme: vfs ? FILESYSTEM_SCHEMA : OBJECTSCRIPT_FILE_SCHEMA,
-    });
-    if (workspaceFolder && workspaceFolder !== "") {
-      uri = uri.with({
-        authority: workspaceFolder,
+    workspaceFolder = workspaceFolder && workspaceFolder !== "" ? workspaceFolder : currentWorkspaceFolder();
+    const wFolderUri = workspaceFolderUri(workspaceFolder);
+    let uri: vscode.Uri;
+    if (wFolderUri.scheme === FILESYSTEM_SCHEMA) {
+      uri = wFolderUri.with({
+        path: `/${name}`,
       });
+    } else {
+      const found = this.getAsFile(name, workspaceFolder);
+      if (found) {
+        return vscode.Uri.file(found);
+      }
+      const fileExt = name.split(".").pop();
+      const fileName = name
+        .split(".")
+        .slice(0, -1)
+        .join(fileExt.match(/cls/i) ? "/" : ".");
+      name = fileName + "." + fileExt;
+      uri = vscode.Uri.file(name).with({
+        scheme: vfs ? FILESYSTEM_SCHEMA : OBJECTSCRIPT_FILE_SCHEMA,
+      });
+      if (workspaceFolder && workspaceFolder !== "") {
+        uri = uri.with({
+          authority: workspaceFolder,
+        });
+      }
     }
     if (namespace && namespace !== "") {
       uri = uri.with({
@@ -53,7 +64,10 @@ export class DocumentContentProvider implements vscode.TextDocumentContentProvid
   private onDidChangeEvent: vscode.EventEmitter<vscode.Uri> = new vscode.EventEmitter<vscode.Uri>();
 
   public provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): vscode.ProviderResult<string> {
-    const fileName = uri.path.split("/")[1];
+    const fileName = uri.path
+      .split("/")
+      .slice(1)
+      .join(".");
     const api = new AtelierAPI();
     const query = url.parse(decodeURIComponent(uri.toString()), true).query;
     if (query) {

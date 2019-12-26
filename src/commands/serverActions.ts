@@ -1,15 +1,37 @@
 import * as vscode from "vscode";
-import { config } from "../extension";
+import { config, workspaceState, checkConnection } from "../extension";
+import { currentWorkspaceFolder, terminalWithDocker } from "../utils";
 
 export async function serverActions(): Promise<void> {
-  const conn = config("conn");
-  const connInfo = `${conn.host}:${conn.port}[${conn.ns}]`;
-  const serverUrl = `${conn.https ? "https" : "http"}://${conn.host}:${conn.port}`;
-  const portalUrl = `${serverUrl}/csp/sys/UtilHome.csp?$NAMESPACE=${conn.ns}`;
-  const classRef = `${serverUrl}/csp/documatic/%25CSP.Documatic.cls?LIBRARY=${conn.ns}`;
+  const { active, host, ns, https, port: defaultPort, username, password } = config("conn");
+  const workspaceFolder = currentWorkspaceFolder();
+  const port = workspaceState.get(workspaceFolder + ":port", defaultPort);
+  const connInfo = `${host}:${port}[${ns}]`;
+  const serverUrl = `${https ? "https" : "http"}://${host}:${port}`;
+  const portalUrl = `${serverUrl}/csp/sys/UtilHome.csp?$NAMESPACE=${ns}`;
+  const classRef = `${serverUrl}/csp/documatic/%25CSP.Documatic.cls?LIBRARY=${ns}`;
+  const iris = workspaceState.get(workspaceFolder + ":iris", false);
+  const auth = iris
+    ? `&IRISUsername=${username}&IRISPassword=${password}`
+    : `&CacheUserName=${username}&CachePassword=${password}`;
+
+  const terminal = [];
+  if (workspaceState.get(workspaceFolder + ":docker", true)) {
+    terminal.push({
+      id: "openDockerTerminal",
+      label: "Open terminal in docker",
+      detail: "Use docker-compose to start session inside configured service",
+    });
+  }
   return vscode.window
     .showQuickPick(
       [
+        {
+          id: "refreshConnection",
+          label: "Refresh connection",
+          detail: "Force attempt to connect to the server",
+        },
+        ...terminal,
         {
           detail: "Enable/Disable current connection",
           id: "toggleConnection",
@@ -31,17 +53,27 @@ export async function serverActions(): Promise<void> {
       }
     )
     .then(action => {
+      if (!action) {
+        return;
+      }
       switch (action.id) {
         case "toggleConnection": {
-          return vscode.workspace.getConfiguration().update("objectscript.conn.active", !conn.active);
+          return vscode.workspace.getConfiguration().update("objectscript.conn.active", !active);
         }
         case "openPortal": {
-          vscode.env.openExternal(vscode.Uri.parse(portalUrl));
+          vscode.env.openExternal(vscode.Uri.parse(portalUrl + auth));
           break;
         }
         case "openClassReference": {
-          vscode.env.openExternal(vscode.Uri.parse(classRef));
+          vscode.env.openExternal(vscode.Uri.parse(classRef + auth));
           break;
+        }
+        case "refreshConnection": {
+          checkConnection();
+          break;
+        }
+        case "openDockerTerminal": {
+          terminalWithDocker();
         }
       }
     });

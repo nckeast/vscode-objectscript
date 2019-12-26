@@ -212,6 +212,27 @@ export class ClassLineBreakpoint extends LineBreakpoint {
   }
 }
 
+export class RoutineLineBreakpoint extends LineBreakpoint {
+  public method: string;
+  public methodOffset: number;
+
+  /** contructs a line breakpoint for passing to sendSetBreakpointCommand */
+  public constructor(fileUri: string, line: number, method: string, methodOffset: number);
+  public constructor(...rest) {
+    if (typeof rest[0] === "object") {
+      const breakpointNode: Element = rest[0];
+      const connection: Connection = rest[1];
+      super(breakpointNode, connection);
+      this.line = parseInt(breakpointNode.getAttribute("lineno"), 10);
+      this.fileUri = breakpointNode.getAttribute("filename");
+    } else {
+      super(rest[0], rest[1]);
+      this.method = rest[2];
+      this.methodOffset = rest[3];
+    }
+  }
+}
+
 /** class for conditional breakpoints. Returned from a breakpoint_list or passed to sendBreakpointSetCommand */
 export class ConditionalBreakpoint extends Breakpoint {
   /** File URI */
@@ -321,7 +342,7 @@ export class SourceResponse extends Response {
   public source: string;
   public constructor(document: XMLDocument, connection: Connection) {
     super(document, connection);
-    this.source = new Buffer(document.documentElement.textContent, "base64").toString();
+    this.source = Buffer.from(document.documentElement.textContent, "base64").toString();
   }
 }
 
@@ -473,6 +494,22 @@ export class PropertyGetResponse extends Response {
     this.children = Array.from(document.documentElement.firstChild.childNodes).map(
       (propertyNode: Element): Property => new Property(propertyNode, property.context)
     );
+  }
+}
+
+/** The response to a property_set command */
+export class PropertySetResponse extends Response {
+  /** the children of the given property */
+  public children: Property[];
+  /**
+   * @param  {XMLDocument} document
+   * @param  {Property} property
+   */
+  public constructor(document: XMLDocument, property: Property) {
+    super(document, property.context.stackFrame.connection);
+    // this.children = Array.from(document.documentElement.firstChild.childNodes).map(
+    //   (propertyNode: Element): Property => new Property(propertyNode, property.context)
+    // );
   }
 }
 
@@ -701,6 +738,8 @@ export class Connection extends DbgpConnection {
       args += ` -f ${breakpoint.fileUri}`;
       if (breakpoint instanceof ClassLineBreakpoint) {
         args += ` -m ${breakpoint.method} -n ${breakpoint.methodOffset}`;
+      } else if (breakpoint instanceof RoutineLineBreakpoint) {
+        args += ` -n ${breakpoint.methodOffset}`;
       } else {
         args += ` -n ${breakpoint.line}`;
       }
@@ -799,6 +838,18 @@ export class Connection extends DbgpConnection {
     );
   }
 
+  /** Sends a property_get command */
+  public async sendPropertySetCommand(property: Property): Promise<PropertySetResponse> {
+    const value = Buffer.from(property.value).toString("base64");
+    return new PropertySetResponse(
+      await this._enqueueCommand(
+        "property_set",
+        `-d ${property.context.stackFrame.level} -n ${property.fullName} -- ${value}`
+      ),
+      property
+    );
+  }
+
   // ------------------------------- eval -----------------------------------------
 
   /** sends an eval command */
@@ -881,7 +932,7 @@ export class Connection extends DbgpConnection {
       commandString += " " + command.args;
     }
     if (command.data) {
-      commandString += " -- " + new Buffer(command.data).toString("base64");
+      commandString += " -- " + Buffer.from(command.data).toString("base64");
     }
     commandString += "\n";
     const data = iconv.encode(commandString, ENCODING);

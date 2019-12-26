@@ -16,19 +16,36 @@ const filesFilter = (file: any) => {
   return true;
 };
 
+const getCategory = (fileName: string, addCategory: {} | boolean): string => {
+  const fileExt = fileName
+    .split(".")
+    .pop()
+    .toLowerCase();
+  if (typeof addCategory === "object") {
+    for (const pattern of Object.keys(addCategory)) {
+      if (new RegExp(`^${pattern}$`).test(fileName)) {
+        return addCategory[pattern];
+      }
+      if (addCategory[fileExt]) return addCategory[fileExt];
+      if (addCategory["*"]) return addCategory["*"];
+    }
+    return null;
+  }
+  switch (fileExt) {
+    case "cls":
+    case "int":
+    case "inc":
+    case "mac":
+      return fileExt;
+    default:
+      return "oth";
+  }
+};
+
 export const getFileName = (folder: string, name: string, split: boolean, addCategory: boolean): string => {
   const fileNameArray: string[] = name.split(".");
   const fileExt = fileNameArray.pop().toLowerCase();
-  const cat =
-    typeof addCategory === "object" && addCategory[fileExt]
-      ? addCategory[fileExt]
-      : addCategory
-      ? fileExt === "cls"
-        ? "CLS"
-        : ["int", "mac", "inc"].includes(fileExt)
-        ? "RTN"
-        : "OTH"
-      : null;
+  const cat = addCategory ? getCategory(name, addCategory) : null;
   if (split) {
     const fileName = [folder, cat, ...fileNameArray].filter(notNull).join(path.sep);
     return [fileName, fileExt].join(".");
@@ -138,7 +155,15 @@ export async function exportList(files: string[], workspaceFolder: string, names
       outputChannel.appendLine(`Items failed to export: \n${errors.join("\n")}`);
     }
   };
-  return run(files);
+  return vscode.window.withProgress(
+    {
+      title: "Export items",
+      location: vscode.ProgressLocation.Notification,
+    },
+    () => {
+      return run(files);
+    }
+  );
 }
 
 export async function exportAll(workspaceFolder?: string): Promise<any> {
@@ -181,15 +206,7 @@ Would you like to continue?`,
     }
   }
   const { workspaceFolder, namespace } = node;
-  const nodesList = node instanceof RootNode ? node.getChildren(node) : Promise.resolve([node]);
-  return nodesList
-    .then(nodes =>
-      nodes.reduce(
-        (list, subNode) => list.concat(subNode instanceof PackageNode ? subNode.getClasses() : [subNode.fullName]),
-        []
-      )
-    )
-    .then(items => {
-      return exportList(items, workspaceFolder, namespace);
-    });
+  return node.getItems4Export().then(items => {
+    return exportList(items, workspaceFolder, namespace);
+  });
 }

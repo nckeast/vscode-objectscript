@@ -6,6 +6,10 @@ import { AtelierAPI } from "../api";
 import { config, documentContentProvider, FILESYSTEM_SCHEMA, fileSystemProvider } from "../extension";
 import { DocumentContentProvider } from "../providers/DocumentContentProvider";
 import { currentFile, CurrentFile, outputChannel } from "../utils";
+import { RootNode } from "../explorer/models/rootNode";
+import { PackageNode } from "../explorer/models/packageNode";
+import { ClassNode } from "../explorer/models/classesNode";
+import { RoutineNode } from "../explorer/models/routineNode";
 
 async function compileFlags(): Promise<string> {
   const defaultFlags = config().compileFlags;
@@ -35,6 +39,9 @@ function updateOthers(others: string[]) {
 }
 
 async function loadChanges(files: CurrentFile[]): Promise<any> {
+  if (!files.length) {
+    return;
+  }
   const api = new AtelierAPI(files[0].uri);
   return Promise.all(
     files.map(file =>
@@ -67,19 +74,20 @@ async function compile(docs: CurrentFile[], flags?: string): Promise<any> {
       const info = docs.length > 1 ? "" : `${docs[0].name}: `;
       if (data.status && data.status.errors && data.status.errors.length) {
         throw new Error(`${info}Compile error`);
-      } else {
-        vscode.window.showInformationMessage(`${info}Compile successful`, "Hide");
+      } else if (!config("suppressCompileMessages")) {
+        vscode.window.showInformationMessage(`${info}Compilation succeeded`, "Hide");
       }
       return docs;
     })
-    .then(loadChanges)
     .catch((error: Error) => {
       outputChannel.appendLine(error.message);
       outputChannel.show(true);
       vscode.window.showErrorMessage(error.message, "Show details").then(data => {
         outputChannel.show(true);
       });
-    });
+      return [];
+    })
+    .then(loadChanges);
 }
 
 export async function importAndCompile(askFLags = false): Promise<any> {
@@ -168,4 +176,23 @@ export async function importFolder(uri: vscode.Uri): Promise<any> {
     },
     (error, files) => importFiles(files.map(name => path.join(folder, name)))
   );
+}
+
+export async function compileExplorerItem(node: RootNode | PackageNode | ClassNode | RoutineNode): Promise<any> {
+  const { workspaceFolder, namespace } = node;
+  const flags = config().compileFlags;
+  const api = new AtelierAPI(workspaceFolder);
+  api.setNamespace(namespace);
+  let docs = [node.fullName];
+  if (node instanceof PackageNode) {
+    switch (node.category) {
+      case "RTN":
+        docs = [node.fullName + ".*.mac"];
+        break;
+      case "CLS":
+        docs = [node.fullName + ".*.cls"];
+        break;
+    }
+  }
+  return api.actionCompile(docs, flags);
 }

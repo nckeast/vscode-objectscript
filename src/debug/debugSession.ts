@@ -15,7 +15,6 @@ import {
 } from "vscode-debugadapter";
 import { DebugProtocol } from "vscode-debugprotocol";
 import WebSocket = require("ws");
-// import { ObjectScriptDebugConnection } from "./debugConnection";
 import { AtelierAPI } from "../api";
 import * as xdebug from "./xdebugConnection";
 import { FILESYSTEM_SCHEMA } from "../extension";
@@ -45,7 +44,7 @@ export async function convertClientPathToDebugger(localPath: string, namespace: 
     if (query.ns && query.ns !== "") {
       namespace = query.ns.toString();
     }
-    fileName = pathname.slice(1);
+    fileName = pathname.slice(1).replace(/\//, ".");
   } else {
     fileName = await vscode.workspace
       .openTextDocument(localPath)
@@ -55,6 +54,8 @@ export async function convertClientPathToDebugger(localPath: string, namespace: 
       });
   }
 
+  namespace = encodeURIComponent(namespace);
+  fileName = encodeURIComponent(fileName);
   return `dbgp://|${namespace}|${fileName}`;
 }
 
@@ -104,7 +105,7 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
       ...response.body,
       supportsConfigurationDoneRequest: true,
       supportsEvaluateForHovers: true,
-      supportsSetVariable: false, // TODO
+      supportsSetVariable: true,
       supportsConditionalBreakpoints: false, // TODO
       supportsStepBack: false,
     };
@@ -204,13 +205,21 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
     await this._debugTargetSet.wait(1000);
 
     const filePath = args.source.path;
+    const uri = filePath.startsWith(FILESYSTEM_SCHEMA) ? vscode.Uri.parse(filePath) : vscode.Uri.file(filePath);
     const fileUri = await convertClientPathToDebugger(args.source.path, this._namespace);
+    const [, fileName] = fileUri.match(/\|([^|]+)$/);
 
-    // const currentList = (await this._connection.sendBreakpointListCommand()).breakpoints.filter(breakpoint => {
-    //   if (breakpoint instanceof xdebug.LineBreakpoint) {
-    //     return breakpoint.fileUri === fileUri;
-    //   }
-    // });
+    const currentList = await this._connection.sendBreakpointListCommand();
+    currentList.breakpoints
+      .filter(breakpoint => {
+        if (breakpoint instanceof xdebug.LineBreakpoint) {
+          return breakpoint.fileUri === fileName;
+        }
+        return false;
+      })
+      .map(breakpoint => {
+        this._connection.sendBreakpointRemoveCommand(breakpoint);
+      });
 
     let xdebugBreakpoints: (xdebug.ConditionalBreakpoint | xdebug.ClassLineBreakpoint | xdebug.LineBreakpoint)[] = [];
     xdebugBreakpoints = await Promise.all(
@@ -218,9 +227,9 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
         const line = breakpoint.line;
         if (breakpoint.condition) {
           return new xdebug.ConditionalBreakpoint(breakpoint.condition, fileUri, line);
-        } else if (filePath.endsWith("cls")) {
-          return await vscode.workspace.openTextDocument(filePath).then(document => {
-            const methodMatchPattern = new RegExp(`^(?:Class)?Method (.+)(?=[( ])`, "i");
+        } else if (fileName.endsWith("cls")) {
+          return await vscode.workspace.openTextDocument(uri).then(document => {
+            const methodMatchPattern = new RegExp(`^(?:Class)?Method ([^(]+)(?=[( ])`, "i");
             for (let i = line; line > 0; i--) {
               const lineOfCode = document.lineAt(i).text;
               const methodMatch = lineOfCode.match(methodMatchPattern);
@@ -230,6 +239,8 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
               }
             }
           });
+        } else if (filePath.endsWith("mac") || filePath.endsWith("int")) {
+          return new xdebug.RoutineLineBreakpoint(fileUri, line, "", line - 1);
         } else {
           return new xdebug.LineBreakpoint(fileUri, line);
         }
@@ -277,7 +288,8 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
       stack.stack.map(
         async (stackFrame: xdebug.StackFrame, index): Promise<StackFrame> => {
           const [, namespace, name] = decodeURI(stackFrame.fileUri).match(/^dbgp:\/\/\|([^|]+)\|(.*)$/);
-          const routine = name.includes(".") ? name : name + ".int";
+          const routine = name;
+          // const routine = name.includes(".") ? name : name + ".int";
           const fileUri = DocumentContentProvider.getUri(routine, null, namespace).toString();
           const source = new Source(routine, fileUri);
           let line = stackFrame.line + 1;
@@ -294,11 +306,12 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
               }
             });
           }
+          const place = `${stackFrame.method}+${stackFrame.methodOffset}`;
           const stackFrameId = this._stackFrameIdCounter++;
           this._stackFrames.set(stackFrameId, stackFrame);
           return {
             id: stackFrameId,
-            name: source.name,
+            name: place,
             source,
             line,
             column: 1,
@@ -490,6 +503,31 @@ export class ObjectScriptDebugSession extends LoggingDebugSession {
     } else {
       response.body = { result: "no result", variablesReference: 0 };
     }
+    this.sendResponse(response);
+  }
+
+  protected async setVariableRequest(
+    response: DebugProtocol.SetVariableResponse,
+    args: DebugProtocol.SetVariableArguments
+  ): Promise<void> {
+    const { value, name, variablesReference } = args;
+    let property = null;
+    if (this._contexts.has(variablesReference)) {
+      // VS Code is requesting the variables for a SCOPE, so we have to do a context_get
+      const context = this._contexts.get(variablesReference);
+      const properties = await context.getProperties();
+      property = properties.find(el => el.name === name);
+    } else if (this._properties.has(variablesReference)) {
+      // VS Code is requesting the subelements for a variable, so we have to do a property_get
+      property = this._properties.get(variablesReference);
+    }
+    property.value = value;
+    await this._connection.sendPropertySetCommand(property);
+
+    response.body = {
+      value: args.value,
+      variablesReference: args.variablesReference,
+    };
     this.sendResponse(response);
   }
 }

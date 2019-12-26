@@ -1,26 +1,23 @@
 import * as vscode from "vscode";
 
-import { NodeBase } from "./nodeBase";
+import { NodeBase, NodeOptions } from "./nodeBase";
 import { PackageNode } from "./packageNode";
 import { RoutineNode } from "./routineNode";
+import { AtelierAPI } from "../../api";
+import { ClassNode } from "./classesNode";
 
 export class RootNode extends NodeBase {
   public readonly contextValue: string;
-  public eventEmitter: vscode.EventEmitter<NodeBase>;
-  private _items: any[];
+  private readonly _category: string;
 
-  public constructor(
-    label: string,
-    contextValue: string,
-    eventEmitter: vscode.EventEmitter<NodeBase>,
-    items: any[],
-    workspaceFolder: string,
-    namespace: string
-  ) {
-    super(label, label, workspaceFolder, namespace);
+  public constructor(label: string, fullName: string, contextValue: string, category: string, options: NodeOptions) {
+    super(label, fullName, options);
     this.contextValue = contextValue;
-    this.eventEmitter = eventEmitter;
-    this._items = items;
+    this._category = category;
+  }
+
+  public get category(): string {
+    return this._category;
   }
 
   public getTreeItem(): vscode.TreeItem {
@@ -32,56 +29,81 @@ export class RootNode extends NodeBase {
   }
 
   public async getChildren(element): Promise<NodeBase[]> {
-    if (element.contextValue === "dataRootNode:classesRootNode") {
-      return this.getClasses();
-    }
-
-    if (element.contextValue === "dataRootNode:routinesRootNode") {
-      return this.getRoutines();
-    }
+    const path = this instanceof PackageNode ? this.fullName + "/" : "";
+    return this.getItems(path, this._category);
   }
 
-  private async getClasses(): Promise<PackageNode[]> {
-    const items = this.makeTree(this._items);
+  public getList(path: string, category: string, flat: boolean) {
+    const sql = "CALL %Library.RoutineMgr_StudioOpenDialog(?,?,?,?,?,?,?)";
+    // const sql = "CALL %Library.RoutineMgr_StudioOpenDialog(?,,,,,,?)";
+    let spec = "";
+    switch (category) {
+      case "CLS":
+        spec = "*.cls";
+        break;
+      case "RTN":
+        spec = "*.mac,*.int";
+        break;
+      case "INC":
+        spec = "*.inc";
+        break;
+      case "ALL":
+        spec = "*.cls,*.mac,*.int,*.inc";
+        break;
+      default:
+        return;
+    }
+    const direction = "1";
+    const orderBy = "1"; // by Name
+    const notStudio = "0";
+    const generated = this.options.generated ? "1" : "0";
 
-    return items.map(
-      ({ name, nodes }): PackageNode => new PackageNode(name, nodes, this.workspaceFolder, this.namespace)
+    spec = path + spec;
+
+    const systemFiles = this.namespace === "%SYS" ? "1" : "0";
+
+    const api = new AtelierAPI(this.workspaceFolder);
+    api.setNamespace(this.namespace);
+    return api
+      .actionQuery(sql, [spec, direction, orderBy, systemFiles, flat ? "1" : "0", notStudio, generated])
+      .then(data => {
+        const content = data.result.content;
+        return content;
+      })
+      .then(data =>
+        data.map(el => {
+          const fullName = (this instanceof PackageNode ? this.fullName + "." : "") + el.Name;
+          return {
+            ...el,
+            fullName,
+          };
+        })
+      );
+  }
+
+  public getItems(path: string, category: string): Promise<NodeBase[]> {
+    return this.getList(path, category, false).then(data =>
+      data
+        .map(el => {
+          switch (el.Type) {
+            case "9":
+              return new PackageNode(el.Name, el.fullName, category, this.options);
+            case "4":
+              return new ClassNode(el.Name, el.fullName, this.options);
+            case "0":
+            case "1":
+            case "2":
+              return new RoutineNode(el.Name, el.fullName, this.options);
+            default:
+              return null;
+          }
+        })
+        .filter(el => el !== null)
     );
   }
 
-  private async getRoutines(): Promise<RoutineNode[]> {
-    return this._items.map(
-      ({ name }): RoutineNode => new RoutineNode(name, name, this.workspaceFolder, this.namespace)
-    );
-  }
-
-  private makeTree(items: any[]): any[] {
-    let tree;
-    tree = items.map(({ name }) => ({ name }));
-    tree.forEach(el => {
-      const parent = el.name.split(".").slice(0, -2);
-      el.parent = parent.join(".");
-      el.fullName = el.name;
-      el.name = el.name
-        .split(".")
-        .slice(-2)
-        .join(".");
-      const parents = parent.map((name, i) => {
-        return {
-          name,
-          fullName: parent.slice(0, i + 1).join("."),
-          parent: parent.slice(0, i).join("."),
-        };
-      });
-      tree = tree.concat(parents);
-    });
-    tree = tree.filter((value, index, self) => self.findIndex(({ fullName }) => fullName === value.fullName) === index);
-    tree = tree.sort((el1, el2) => el1.fullName.localeCompare(el2.fullName));
-    tree.forEach(el => {
-      el.nodes = tree.filter(ch => el.fullName === ch.parent);
-    });
-    tree = tree.filter(el => el.parent === "");
-
-    return tree;
+  public getItems4Export(): Promise<string[]> {
+    const path = this instanceof PackageNode ? this.fullName + "/" : "";
+    return this.getList(path, "ALL", true).then(data => data.map(el => el.Name));
   }
 }
