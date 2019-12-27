@@ -54,34 +54,60 @@
         },
         {
           "include": "#embeddedJS"
+        },
+        {
+          "include": "#embeddedHTML"
         }
       ]
     },
     "embeddedSQL": {
       "patterns": [
         {
-          "begin": "(&sql)(\\()",
+          "begin": "(?i)(&sql)(\\()",
           "beginCaptures": {
             "1": { "name": "keyword.special.sql.objectscript" },
             "2": { "name": "punctuation.objectscript" }
           },
           "patterns": [{ "include": "source.sql" }],
           "contentName": "meta.embedded.block.sql",
-          "end": "\\)"
+          "end": "(\\))",
+          "endCaptures": {
+            "1": { "name": "punctuation.objectscript" }
+          }
         }
       ]
     },
     "embeddedJS": {
       "patterns": [
         {
-          "begin": "(&js)(<)",
+          "begin": "(?i)(&js|&javascript)(<)",
           "beginCaptures": {
             "1": { "name": "keyword.special.js.objectscript" },
             "2": { "name": "punctuation.objectscript" }
           },
           "patterns": [{ "include": "source.js" }],
           "contentName": "text.js",
-          "end": ">"
+          "end": "(>)",
+          "endCaptures": {
+            "1": { "name": "punctuation.objectscript" }
+          }
+        }
+      ]
+    },
+    "embeddedHTML": {
+      "patterns": [
+        {
+          "begin": "(?i)(&html)(<)",
+          "beginCaptures": {
+            "1": { "name": "keyword.special.js.objectscript" },
+            "2": { "name": "punctuation.objectscript" }
+          },
+          "patterns": [{ "include": "text.html.basic" }],
+          "contentName": "meta.embedded.block.html",
+          "end": "(>)",
+          "endCaptures": {
+            "1": { "name": "punctuation.objectscript" }
+          }
         }
       ]
     },
@@ -211,11 +237,11 @@
         },
         {
           "match": "%?[a-zA-Z0-9]+",
-          "name": "variable.name.objectscrip"
+          "name": "variable.name.objectscript"
         },
         {
           "match": "\\^%?[a-zA-Z0-9]+(\\.[a-zA-Z0-9]+)*",
-          "name": "variable.name.global.objectscrip"
+          "name": "variable.name.global.objectscript"
         },
         {
           "match": "(?i)\\$system(.[a-zA-Z0-9]+)*",

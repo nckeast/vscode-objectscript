@@ -96,6 +96,8 @@ export class ObjectScriptDiagnosticProvider {
     let endingComma = false;
     let isCode = !isClass;
     let jsScript = false;
+    let embeddedJS = false;
+    let embeddedSQL = false;
     for (let i = 0; i < document.lineCount; i++) {
       const line = document.lineAt(i);
       const text = this.stripLineComments(line.text);
@@ -109,6 +111,30 @@ export class ObjectScriptDiagnosticProvider {
       if (jsScript) {
         if (text.match(/<\/script>/)) {
           jsScript = false;
+        }
+        continue;
+      }
+
+      // Check for embedded JavaScript
+      if (text.match(/(?i:&js|&javascript)(<)/)) {
+        embeddedJS = true;
+      }
+
+      if (embeddedJS) {
+        if (text.match(/>/)) {
+          embeddedJS = false;
+        }
+        continue;
+      }
+
+      // Check for embedded JavaScript
+      if (text.match(/(?i:&sql)(<)/)) {
+        embeddedSQL = true;
+      }
+
+      if (embeddedSQL) {
+        if (text.match(/\)/)) {
+          embeddedSQL = false;
         }
         continue;
       }
