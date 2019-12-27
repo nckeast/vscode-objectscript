@@ -14,8 +14,10 @@ async function main() {
 
     const launchArgs = ["--enable-proposed-api", "daimor.vscode-objectscript"];
 
+    let testOption = { extensionDevelopmentPath, extensionTestsPath, launchArgs };
+
     // Download VS Code, unzip it and run the integration test
-    await runTests({ extensionDevelopmentPath, extensionTestsPath, launchArgs });
+    await runTests(testOption);
   } catch (err) {
     console.error("Failed to run tests");
     process.exit(1);
