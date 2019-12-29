@@ -30,7 +30,7 @@ export async function xml2doc(context: vscode.ExtensionContext, document: vscode
         if (conn.ns) {
           const previewUri = DocumentContentProvider.getUri(fileName, conn.workspaceFolder, conn.ns, true)
           xmlContentProvider.update(previewUri);
-          vscode.window.showTextDocument(previewUri);
+          vscode.window.showTextDocument(previewUri, { preserveFocus: true, preview: true });
           message = [actionDescription + ' complete.'];
           outputConsole(message);
         } else {
