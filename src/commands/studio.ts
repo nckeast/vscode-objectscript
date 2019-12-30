@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import { AtelierAPI } from "../api";
 import { FILESYSTEM_SCHEMA } from "../extension";
-import { outputChannel } from "../utils";
+import { currentFile, outputChannel } from "../utils";
+import { loadChanges } from "./compile";
 
 interface StudioAction extends vscode.QuickPickItem {
   name: string;
@@ -26,7 +27,7 @@ function doMenuAction(uri: vscode.Uri, menuType: string): Promise<any> {
           list.concat(
             sub.items
               .filter(el => el.id !== "" && el.separator == 0 && el.enabled == 1)
-              .map(el => ({ ...el, id: `${sub.id},${el.id}`, label: el.name, itemId: el.id, type: sub.type }))
+              .map(el => ({ ...el, id: `${sub.id},${el.id}`, label: el.name.replace('&',''), itemId: el.id, type: sub.type }))
           ),
         []
       )
@@ -67,13 +68,58 @@ function doMenuAction(uri: vscode.Uri, menuType: string): Promise<any> {
             .actionQuery(query, parameters)
             .then(data => data.result.content.pop())
             .then(userAction => {
-              if (userAction && userAction.action != "0") {
-                outputChannel.appendLine(`Studio Action "${action.label}" not supported`);
-                outputChannel.show();
-              }
+              if (userAction) {
+                if (userAction.reload) {
+                  reload();
+                }
+                if (userAction.action == "0") {
+                  // No subsequent action
+                } else if (userAction.action == "1") {
+                  // Show message
+                  vscode.window
+                    .showInformationMessage(userAction.target, ...['Yes', 'No', 'Cancel'])
+                    .then(selection => {
+                      let answer = (selection == 'No' ? '0' : (selection == 'Yes' ? '1' : '2'));
+                      const query = "select * from %Atelier_v1_Utils.Extension_AfterUserAction(?,?,?,?,?)";
+                      const parameters = ["0", action.id, name, answer, ''];
+                      api
+                        .actionQuery(query, parameters)
+                        .then(data => data.result.content.pop())
+                        .then(result => {
+                          if (result) {
+                            if (result.errorText) {
+                              vscode.window.showErrorMessage(result.errorText);
+                            }
+                            if (result.message) {
+                              vscode.window.showInformationMessage(result.message);
+                            }
+                            if (result.reload) {
+                              reload();
+                            }
+                          }
+                        });
+                    });
+                } else {
+                  outputChannel.appendLine(`Studio Action "${action.label}" not supported`);
+                  outputChannel.show();
+                }
+              } 
             })
       );
     });
+}
+
+function reload() {
+  const file = currentFile();
+  return vscode.window.withProgress(
+    {
+      cancellable: false,
+      location: vscode.ProgressLocation.Notification,
+      title: `Reloading ${file.name}`,
+    },
+    () =>
+      loadChanges([file])
+  );
 }
 
 // export function contextMenu(uri: vscode.Uri): Promise<void> {
@@ -81,5 +127,5 @@ function doMenuAction(uri: vscode.Uri, menuType: string): Promise<any> {
 // }
 
 export function mainMenu(uri: vscode.Uri) {
-  return doMenuAction(uri, "");
+  return doMenuAction(uri, "main");
 }
