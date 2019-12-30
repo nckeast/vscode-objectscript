@@ -83,7 +83,7 @@ export class DocumentFormattingEditProvider implements vscode.DocumentFormatting
             range: new vscode.Range(new vscode.Position(i, 0), new vscode.Position(i, space.length)),
           });
         }
-        if (rest.trimLeft().length && !rest.match(/^\s*\bwhile\b/i)) {
+        if (rest.trimLeft().length && !rest.match(/^\s*\b(while|else)\b/i)) {
           const pos = line.text.indexOf("}") + 1;
           edits.push({
             newText: "\n" + " ".repeat(indentSize),
